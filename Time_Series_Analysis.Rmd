@@ -1,6 +1,8 @@
-***title: "Time Series Analysis of Apple Stock Prices Using GARCH models"***
-**author: "Remya Kannan"**
-**date: "March 14, 2017"**
+#***Time Series Analysis of Apple Stock Prices Using GARCH models***
+
+**Author: "Remya Kannan"**
+
+**Date: "March 14, 2017"**
 
 # **Dataset Description**:
 

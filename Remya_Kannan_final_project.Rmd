@@ -1,0 +1,438 @@
+---
+title: "Final Project"
+author: "Remya Kannan"
+date: "June 10, 2016"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+### Step 1 : Load the libraries
+```{r}
+# load RSiena commands:
+library(RSiena)
+library(parallel)
+```
+
+### Step 2 : Set the path 
+```{r}
+# set working directory to where the data are:
+setwd("/Users/Vinayak/Desktop/Remya/Quarter 3/Social Network Analysis/Project Material")
+
+# Read data sets:
+load("Glasgow-friendship.RData")  # friendship networks
+load("Glasgow-demographic.RData") # for gender data
+load("Glasgow-substances.RData")  # for alcoholol data
+load("Glasgow-lifestyle.RData")   # for music listening data
+load("Glasgow-selections.RData")  # for 129 respondents used in SSW
+```
+
+### Step 3 : Basic definitions in SIENA for the behavioural attributes
+```{r}
+rockscale <- matrix(nrow=length(age),ncol=3)
+rownames(rockscale) <- rownames(music1)
+rockscale[,1] <- rowSums(music1[,colnames(music1) %in% c("rock","indie","heavy","grunge")])
+rockscale[,2] <- rowSums(music2[,colnames(music2) %in% c("rock","indie","heavy","grunge")])
+rockscale[,3] <- rowSums(music3[,colnames(music3) %in% c("rock","indie","heavy","grunge")])
+elitescale <- matrix(nrow=length(age),ncol=3)
+rownames(elitescale) <- rownames(music1)
+elitescale[,1] <- rowSums(music1[,colnames(music1) %in% c("folk","jazz","classical")])
+elitescale[,2] <- rowSums(music2[,colnames(music2) %in% c("folk","jazz","classical")])
+elitescale[,3] <- rowSums(music3[,colnames(music3) %in% c("folk","jazz","classical")])
+chartscale <- matrix(nrow=length(age),ncol=3)
+rownames(chartscale) <- rownames(music1)
+chartscale[,1] <- rowSums(music1[,colnames(music1) %in% c("techno","chart","dance","rave")])
+chartscale[,2] <- rowSums(music2[,colnames(music2) %in% c("techno","chart","dance","rave")])
+chartscale[,3] <- rowSums(music3[,colnames(music3) %in% c("techno","chart","dance","rave")])
+```
+
+### Step 4 : Convert valued friendship to binary value
+```{r}
+friendship.1[friendship.1==2] <- 1
+friendship.2[friendship.2==2] <- 1
+friendship.3[friendship.3==2] <- 1
+```
+
+### Step 5 : Identify dependent network and behaviour variables and the constant covariate
+```{r}
+# Identify dependent network variable:
+friendship <- sienaNet(array(c(friendship.1[selection129,selection129],
+                               friendship.2[selection129,selection129],friendship.3[selection129,selection129]),
+                             dim=c(129,129,3)))
+
+# Identify dependent behavior variables:
+drinking <- sienaNet(alcohol[selection129,],type="behavior")
+rock <- sienaNet(rockscale[selection129,],type="behavior")
+elite <- sienaNet(elitescale[selection129,],type="behavior")
+chart <- sienaNet(chartscale[selection129,],type="behavior")
+
+# Identify constant covariate:
+sexF <- coCovar(sex.F[selection129])
+```
+
+### Step 6 : SIENA model 
+```{r}
+# Bind data together for Siena analysis:
+SSWdata <- sienaDataCreate(friendship,drinking,rock,elite,chart,sexF)
+
+# Create effects object for model specification:
+SSWeffects <- getEffects(SSWdata)
+
+#Give some estimation settings.
+#Here 4 phase 2 subphases and 1000 phase 3 iterations are used.
+# These settings are the standard and work well for most datasets.
+estimationSettings <- sienaAlgorithmCreate(projname='SSW-results')
+
+# Specify the model:
+SSWeffects <- includeEffects(SSWeffects,nbrDist2)
+SSWeffects <- includeEffects(SSWeffects,egoX,altX,sameX,interaction1="sexF")
+SSWeffects <- includeEffects(SSWeffects,egoX,altX,simX,interaction1="drinking")
+SSWeffects <- includeEffects(SSWeffects,egoX,altX,simX,interaction1="rock")
+SSWeffects <- includeEffects(SSWeffects,egoX,altX,simX,interaction1="elite")
+SSWeffects <- includeEffects(SSWeffects,egoX,altX,simX,interaction1="chart")
+SSWeffects <- includeEffects(SSWeffects,name="drinking",totSim,interaction1="friendship")
+SSWeffects <- includeEffects(SSWeffects,name="rock",totSim,interaction1="friendship")
+SSWeffects <- includeEffects(SSWeffects,name="elite",totSim,interaction1="friendship")
+SSWeffects <- includeEffects(SSWeffects,name="chart",totSim,interaction1="friendship")
+
+# Shorthand to include all effects from covariates/behaviors on behaviors:
+SSWeffects$include[SSWeffects$shortName=="effFrom" & SSWeffects$type=="eval"] <- TRUE
+# de-select quadratric shape parameters (included by default):
+SSWeffects$include[SSWeffects$shortName=="quad"] <- FALSE
+# check how model specification looks like:
+SSWeffects
+
+# Now create a model object:
+SSWmodel <- sienaModelCreate(useStdInits=TRUE,projname='SSW-results')
+
+# Estimate the model (using two cores of the processor to speed up the process):
+SSWresults <- siena07(SSWmodel,data=SSWdata,effects=SSWeffects,useCluster=TRUE,
+                      initC=TRUE,nbrNodes=2)
+
+
+# Take a look at the results & save them:
+SSWresults 
+
+save.image("SSWresults.RData")
+```
+
+### Step 7 : Create model 1 for goodness of fit
+```{r}
+# Included from getEffects()
+SSWmodel <- getEffects(SSWdata)
+
+# Add the transitive triplets effects.
+model1 <- includeEffects(SSWmodel, transTrip, name="friendship")
+
+# Check what is specified in model1:
+model1
+
+# Use the siena07() function to estimate the parameters of model1.
+# To use the goodness of fit testing functionality, it is necessary
+# to specify returnDeps=TRUE; this will include the simulated networks
+# in the results object, and will permit goodness of fit checking later on.
+( results1 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model1, returnDeps=TRUE) )
+```
+
+### Step 8 : GOF using indegreedistribution, outdegreedistribution, geodesicdistribution and triad census
+```{r}
+# Calculate the fit with with respect to the indegree distribution.
+# By specifying "verbose=TRUE" we get information on the screen telling us
+# how far calculations have progressed.
+gof1.id <- sienaGOF(results1, verbose=TRUE,
+                    varName="friendship", IndegreeDistribution)
+gof1.id
+plot(gof1.id)
+# The default for the InDegreeDistribution is to study the fit of the
+# cumulative distribution of the indegrees in the network, summed over all waves
+# except for the first, for indegrees up to 8.
+# The plot shows the observed values as the red dots and numbers;
+# e.g., the sum over waves 2 and wave 3 of the numbers of actors with indegree 0
+# is 12; the sum of the numbers of actors with indegree at most 3 is 75.
+# This applies to the observed data set.
+# The rest of the plot refers to the simulated networks in Phase 3
+# of the algorithm, where it is supposed to have converged
+# (if t-ratios for convergence all are less than 0.10).
+# The shapes are so-called violin plots, which combine box plots
+# with smoothed density plots.
+# The dotted band is a pointwise 90% relative frequency region
+# calculated for the simulated data.
+# The p-value shows that the indegree distribution is represented well.
+# The plot shows the same, as the data are within the band.
+
+# Assess the fit with respect to the outdegree distribution.
+gof1.od <- sienaGOF(results1, verbose=TRUE, varName="friendship",
+                    OutdegreeDistribution)
+gof1.od
+plot(gof1.od)
+# Here also the p-value and the plot show that the
+# outdegree distribution is well represented.
+
+# If the fit of one or both degree distributions had been poor,
+# it would have been good to include some degree-related effects
+# (outdegree-activity, indegree-popularity, etc.);
+# since the fit for the degree distributions is good,
+# this is not necessary here.
+
+# Another important set of statistics is the distribution of
+# geodesic distances (shortest undirected path lengths between actors).
+# GeodesicDistribution calculates the distribution of directed geodesic distances
+GeodesicDistribution <- function (i, data, sims, period, groupName,
+                                  varName, levls=c(1:5,Inf), cumulative=TRUE, ...) {
+  x <- networkExtraction(i, data, sims, period, groupName, varName)
+  require(sna)
+  a <- sna::geodist(symmetrize(x))$gdist
+  if (cumulative)
+  {
+    gdi <- sapply(levls, function(i){ sum(a<=i) })
+  }
+  else
+  {
+    gdi <- sapply(levls, function(i){ sum(a==i) })
+  }
+  names(gdi) <- as.character(levls)
+  gdi
+}
+
+# Calculate the fit with respect to the distribution of geodesic distances:
+gof1.gd <- sienaGOF(results1, verbose=TRUE,
+                    varName="friendship", GeodesicDistribution)
+gof1.gd
+plot(gof1.gd)
+# The fit is very poor, and from the plot we can conclude
+# that (except for distances 1, i.e., direct ties)
+# there are too many dyads in the simulated networks with small distances.
+
+# Before trying to remedy this, look at the
+# fit for the triad census.
+TriadCensus <- function(i, data, sims, wave, groupName, varName, levls=1:16){
+  unloadNamespace("igraph") # to avoid package clashes
+  require(sna)
+  require(network)
+  x <- networkExtraction(i, data, sims, wave, groupName, varName)
+  if (network.edgecount(x) <= 0){x <- symmetrize(x)}
+  # because else triad.census(x) will lead to an error
+  tc <- sna::triad.census(x)[1,levls]
+  # triad names are transferred automatically
+  tc
+}
+gof1.tc <- sienaGOF(results1, verbose=TRUE,
+                    varName="friendship", TriadCensus)
+# This is more time-consuming...
+gof1.tc
+
+# Since the triad counts are wildly different in average and scale,
+# plot them using the scale and center options:
+plot(gof1.tc, scale=TRUE, center=TRUE)
+# The triad census also is unacceptable, although the
+# marginal fit across the statistics is not unacceptable.
+
+
+# Check that the poor fit is not due to time heterogeneity:
+tt1 <- sienaTimeTest(results1)
+summary(tt1)
+# No it isn't.
+```
+
+### Step 9 : Create model 2 to improve goodness of fit
+```{r}
+# Model may be extended to obtain a better fit.
+# This is done by a theory-guided exploration.
+# In the first place, it is known that the tendency to transitive closure
+# might depend less strongly on the number of indirect connections
+# than represented by the transitive triplets effect.
+# Based on this, a forward model selection is done
+# and use the score-type test to see which of these effects
+# could improve the model; for the score-type test
+# For the gwespFF effect, we use parameter=69;
+
+model2 <- setEffect(model1, cycle3, fix=TRUE, test=TRUE, include=TRUE)
+model2 <- setEffect(model2, gwespFF, fix=TRUE, test=TRUE, include=TRUE, parameter=69)
+model2 <- setEffect(model2, transTies, fix=TRUE, test=TRUE, include=TRUE)
+model2 <- setEffect(model2, transRecTrip, fix=TRUE, test=TRUE, include=TRUE)
+model2
+
+( results2 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model2, returnDeps=TRUE) )
+# The convergence t-ratios will be large for some of the fixed effects;
+# this is not a problem at all, because the requirement that they
+# should be small applies only to the estimated parameters, not the fixed ones.
+# However, these printed results do not contain the score-type tests
+# requested by "test=TRUE".
+# The joint test has a chi-squared statistic of 16 with d.f.=4,
+# (the precise chi-squared value will vary, depending on the randomness
+# inherent in the simulation-based procedures),
+# which is highly significant.
+# Based on this, first include the transitive ties effect.
+```
+
+### Step 10 : Create model 3 for goodness of fit
+```{r}
+# For estimation, use the previous result as the starting value
+model3 <- includeEffects(model2, transTies)
+( results3 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model3, returnDeps=TRUE, prevAns=results2) )
+# If any convergence t-ratios for the estimated effects are
+# greater than 0.1 in absolute value, estimate again,
+# now using prevAns=results3:
+( results3 <- siena07(estimationSettings, data=SSWdata,
+                    effects=model3, returnDeps=TRUE, prevAns=results3) )
+```
+
+### Step 11 : Create model 4 for goodness of fit
+```{r}
+# Add the transitive reciprocated triplets effect
+model4 <- includeEffects(model3, transRecTrip)
+( results4 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model4, returnDeps=TRUE, prevAns=results3) )
+```
+
+### Step 12 : Create model 5 for goodness of fit
+```{r}
+# The 3-cycle effect still is significant; add it, too:
+model5 <- includeEffects(model4, cycle3)
+( results5 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model5, returnDeps=TRUE, prevAns=results4) )
+```
+
+### Step 13 : GOF for model 5
+```{r}
+# For the new model, apply the same goodness of fit tests.
+(gof5.id <- sienaGOF(results5, verbose=TRUE,
+                     varName="friendship", IndegreeDistribution))
+plot(gof5.id)
+# Still good.
+
+(gof5.od <- sienaGOF(results5, verbose=TRUE, varName="friendship",
+                     OutdegreeDistribution))
+plot(gof5.od)
+# Still good.
+
+(gof5.gd <- sienaGOF(results5, verbose=TRUE,
+                     varName="friendship", GeodesicDistribution))
+plot(gof5.gd)
+# There still are too many short distances.
+# But the p-value has increased from 0 to 0.001, which shows
+# that at least the observation is near the region of simulated values.
+
+(gof5.tc <- sienaGOF(results5, verbose=TRUE,
+                     varName="friendship", TriadCensus))
+plot(gof5.tc, scale=TRUE, center=TRUE)
+# Improved but still not so good.
+# Is there now evidence for time heterogeneity?
+(tt5 <- sienaTimeTest(results5))
+# No.
+```
+
+### Step 14 : Create model 6 for goodness of fit
+```{r}
+# As a next step, the three basic degree-related effects are added.
+model6 <- includeEffects(model5, outAct, inPop, outPop)
+model6
+
+( results6 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model6, returnDeps=TRUE, prevAns=results5) )
+# In my case there were some high convergence t-ratios, so I estimated again:
+( results6 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model6, returnDeps=TRUE, prevAns=results6) )
+# Indegree popularity is not significant, so I drop it.
+```
+
+### Step 15 : Create model 7 for goodness of fit
+```{r}
+model7 <- setEffect(model6, inPop, fix=TRUE, test=TRUE, include=TRUE)
+( results7 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model7, returnDeps=TRUE) )
+( results7 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model7, returnDeps=TRUE, prevAns=results7) )
+```
+
+### Step 16 : GOF for model 7
+```{r}
+# For the new model, apply the same goodness of fit tests.
+(gof7.id <- sienaGOF(results7, verbose=TRUE,
+                     varName="friendship", IndegreeDistribution))
+plot(gof7.id)
+# Still good.
+
+(gof7.od <- sienaGOF(results7, verbose=TRUE, varName="friendship",
+                     OutdegreeDistribution))
+plot(gof7.od)
+# Still good.
+
+(gof7.gd <- sienaGOF(results7, verbose=TRUE,
+                     varName="friendship", GeodesicDistribution))
+plot(gof7.gd)
+# Much improved. There now are moderately too many short distances.
+
+(gof7.tc <- sienaGOF(results7, verbose=TRUE,
+                     varName="friendship", TriadCensus))
+plot(gof7.tc, scale=TRUE, center=TRUE)
+# Good.
+# Is there now evidence for time heterogeneity?
+(tt7 <- sienaTimeTest(results7))
+# No.
+```
+
+### Step 17 : Create model 8 for goodness of fit
+```{r}
+# Check if the gwespFF effect may replace
+# the combination of transTrip and transTies;
+model8 <- includeEffects(model7, gwespFF)
+model8 <- setEffect(model8, transTies, fix=TRUE, test=TRUE, include=TRUE)
+model8 <- setEffect(model8, transTrip, fix=TRUE, test=TRUE, include=TRUE)
+# First estimate without the prevAns option, because the nonzero estimates
+# for transTrip and transTies should not be used:
+( results8 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model8, returnDeps=TRUE) )
+( results8 <- siena07(estimationSettings, data=SSWdata,
+                      effects=model8, returnDeps=TRUE, prevAns=results8) )
+#summary(results8)
+# In this model, transitive triplets and transitive ties
+# are not significant any more, so it seems that their
+# joint effects are adequately represented by the gwespFF effect.
+# Let us check the goodness of fit for this model.
+```
+
+### Step 18 : GOF for model 8
+```{r}
+# For the new model, apply the same goodness of fit tests.
+(gof8.id <- sienaGOF(results8, verbose=TRUE,
+                     varName="friendship", IndegreeDistribution))
+plot(gof8.id)
+# Still good.
+
+(gof8.od <- sienaGOF(results8, verbose=TRUE, varName="friendship",
+                     OutdegreeDistribution))
+plot(gof8.od)
+# Still good.
+
+(gof8.gd <- sienaGOF(results8, verbose=TRUE,
+                     varName="friendship", GeodesicDistribution))
+plot(gof8.gd)
+# On the low side but reasonable. There are moderately too many short distances.
+
+(gof8.tc <- sienaGOF(results8, verbose=TRUE,
+                     varName="friendship", TriadCensus))
+plot(gof8.tc, scale=TRUE, center=TRUE)
+# Good.
+# Any time heterogeneity?
+(tt8 <- sienaTimeTest(results8))
+# No.
+```
+
+Conclusion : Significant effects are reciprocity, geometrically weighted edgewise shared partners,and 3-cycles (all positive), and transitive reciprocated triplets, outdegree-popularity, and outdegree-activity (all negative). These effects jointly give a good representation of the distributions of indegrees, outdegrees, and geodesic distances,
+and of the triad census.
+
+
+
+
+
+
+
+
+
+
+
